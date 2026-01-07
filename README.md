@@ -115,7 +115,7 @@ This system provides:
 
 1. **Clone the repository**
 ```bash
-git clone https://github.com/yourusername/hindi-medical-transcription.git
+git clone https://github.com/samadrehan02/hindi-medical-transcription.git
 cd hindi-medical-transcription
 ```
 
@@ -407,9 +407,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **Project Maintainer**: Your Name
 
-- GitHub: [@yourusername](https://github.com/yourusername)
-- Email: your.email@example.com
-- LinkedIn: [Your Name](https://linkedin.com/in/yourprofile)
+- GitHub: [@samadrehan02](https://github.com/samadrehan02)
+- Email: samadrehan123456@gmail.com
+- LinkedIn: [Samad Rehan](https://www.linkedin.com/in/samad-rehan-621443218/)
 
 ---
 
@@ -446,7 +446,7 @@ For detailed documentation, see:
 3. **Vosk accuracy**: Struggles with heavy regional accents
 4. **LLM latency**: 10-15 seconds on CPU-only machines
 
-See [Issues](https://github.com/yourusername/hindi-medical-transcription/issues) for full list.
+See [Issues](https://github.com/yourusername/upgraded-waddle/issues) for full list.
 
 ---
 
