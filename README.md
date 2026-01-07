@@ -7,7 +7,6 @@
 
 A real-time Hindi/Hinglish medical transcription system that converts doctor–patient conversations into structured clinical data and professionally formatted OPD notes. Built for low-friction clinical documentation in Indian languages.
 
-![System Demo](https://via.placeholder.com/800x400/0ea5e9/ffffff?text=Hindi+Medical+Transcription+System)
 
 ---
 
