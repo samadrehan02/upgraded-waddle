@@ -6,6 +6,7 @@ from typing import Dict, List, Any, Optional
 from normalize_hi import normalize_hi
 from segment_hi import segment_hi
 from extract_hi import extract_symptoms, extract_medications
+from extract_hi import extract_patient_name, extract_patient_age
 
 
 def build_json_hi(
@@ -40,7 +41,10 @@ def build_json_hi(
     """
     # Step 1: Clean filler words and normalize spacing
     normalized_text = normalize_hi(transcript)
-    
+
+    patient_name = extract_patient_name(normalized_text)
+    patient_age = extract_patient_age(normalized_text)
+
     # Step 2: Split into sentences for entity extraction
     sentences = segment_hi(normalized_text)
     
@@ -58,6 +62,8 @@ def build_json_hi(
     
     return {
         "speaker": speaker,
+        "patient_name": patient_name,
+        "patient_age": patient_age,
         "chief_complaint": chief_complaint,
         "symptoms": symptoms,
         "negatives": negated_symptoms,
