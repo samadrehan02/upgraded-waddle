@@ -2,237 +2,282 @@
 Clinical entity extraction from segmented Hindi text.
 Handles symptoms, locations, durations, medications, and negations.
 """
+
 import re
 from typing import List, Dict, Set, Tuple, Any
+from typing import Optional
 
 from medical_vocab_hi import (
-    SYMPTOMS, NEGATIONS, LOCATIONS, 
-    DURATION_PATTERNS, MEDICATIONS
+    SYMPTOMS,
+    NEGATIONS,
+    LOCATIONS,
+    DURATION_PATTERNS,
+    MEDICATIONS,
+)
+# Hindi spoken numbers commonly used for age
+HINDI_NUMBER_WORDS = {
+    "एक": 1,
+    "दो": 2,
+    "तीन": 3,
+    "चार": 4,
+    "पांच": 5,
+    "छह": 6,
+    "सात": 7,
+    "आठ": 8,
+    "नौ": 9,
+    "दस": 10,
+    "ग्यारह": 11,
+    "बारह": 12,
+    "तेरह": 13,
+    "चौदह": 14,
+    "पंद्रह": 15,
+    "सोलह": 16,
+    "सत्रह": 17,
+    "अठारह": 18,
+    "उन्नीस": 19,
+    "बीस": 20,
+    "इक्कीस": 21,
+    "बाईस": 22,
+    "तेईस": 23,
+    "चौबीस": 24,
+    "पच्चीस": 25,
+    "छब्बीस": 26,
+    "सत्ताईस": 27,
+    "अट्ठाईस": 28,
+    "उनतीस": 29,
+    "तीस": 30,
+    "इकतीस": 31,
+    "बत्तीस": 32,
+    "तैंतीस": 33,
+    "चौंतीस": 34,
+    "पैंतीस": 35,
+    "छत्तीस": 36,
+    "सैंतीस": 37,
+    "अड़तीस": 38,
+    "उनतालीस": 39,
+    "चालीस": 40,
+    "पैंतालीस": 45,
+    "पचास": 50,
+    "पचपन": 55,
+    "साठ": 60,
+    "पैंसठ": 65,
+    "सत्तर": 70,
+    "पचहत्तर": 75,
+    "अस्सी": 80,
+    "पचासी": 85,
+    "नब्बे": 90
+}
+
+DURATION_PATTERNS_COMPILED = [re.compile(p) for p in DURATION_PATTERNS]
+
+# ------------------------------------------------------------------------------
+# Patient demographics extraction (ADD-ON, non-clinical)
+# ------------------------------------------------------------------------------
+
+EN_NAME_PATTERN = re.compile(
+    r"patient\s+name\s*(?:is\s*)?([A-Za-z]+)",
+    re.IGNORECASE
 )
 
-# ==============================================================================
-# PRECOMPILED PATTERNS (for performance)
-# ==============================================================================
-# Compile duration patterns once at module load instead of on every call
-DURATION_PATTERNS_COMPILED = [re.compile(pattern) for pattern in DURATION_PATTERNS]
+EN_AGE_PATTERN = re.compile(
+    r"patient\s+age\s*(?:is\s*)?(\d{1,3})",
+    re.IGNORECASE
+)
+
+HI_NAME_PATTERNS = [
+    r"patient\s+ka\s+naam\s+([^\s]+)",
+    r"मरीज\s+का\s+नाम\s+([^\s]+)",
+    r"मेरा\s+नाम\s+([^\s]+)",
+    r"नाम\s+([^\s]+)\s+है",
+    r"पेशेंट\s+नेम\s+([^\s]+)"
+]
 
 
-# ==============================================================================
-# NEGATION DETECTION
-# ==============================================================================
+HI_SELF_NAME_PATTERN = re.compile(
+    r"मैं\s+([^\s]+)\s+(?:हूँ|हूं)",
+    re.UNICODE
+)
+
+AGE_PATTERNS = [
+    r"patient\s+age\s*(?:is\s*)?(\d{1,3})",
+    r"मेरी\s+उम्र\s*(\d{1,3})",
+    r"उम्र\s*(\d{1,3})",
+    r"(\d{1,3})\s*साल"
+]
+# Negation detection (pre + post symptom, tight window)
+
 def has_negation(sentence: str, symptom_variants: List[str]) -> bool:
     """
-    Check if sentence contains negated mention of symptom.
-    
-    Logic: If a negation word AND a symptom variant both appear
-    in the same sentence, the symptom is negated.
-    
-    Args:
-        sentence: Text sentence to check
-        symptom_variants: List of possible names for the symptom
-        
-    Returns:
-        True if symptom is explicitly negated
-        
-    Example:
-        >>> has_negation("बुखार नहीं है", ["बुखार", "फीवर"])
-        True
-        >>> has_negation("बुखार है", ["बुखार", "फीवर"])
-        False
+    Detect explicit negation of a symptom within a tight local window
+    BEFORE or AFTER the symptom phrase.
     """
-    has_negation_word = any(neg in sentence for neg in NEGATIONS)
-    has_symptom = any(variant in sentence for variant in symptom_variants)
-    
-    return has_negation_word and has_symptom
+
+    for variant in symptom_variants:
+        if variant not in sentence:
+            continue
+
+        idx = sentence.find(variant)
+
+        before = sentence[max(0, idx - 15):idx]
+        after = sentence[idx + len(variant): idx + len(variant) + 15]
+
+        if any(neg in before for neg in NEGATIONS):
+            return True
+
+        if any(neg in after for neg in NEGATIONS):
+            return True
+
+    return False
 
 
-# ==============================================================================
-# SYMPTOM EXTRACTION
-# ==============================================================================
+# Symptom extraction with duration attachment
 def extract_symptoms(sentences: List[str]) -> Tuple[List[Dict[str, str]], List[str]]:
     """
-    Extract symptoms with context (location, duration) from sentence list.
-    
-    Strategy:
-        - Scan each sentence for known symptom terms
-        - If found and not negated, extract with location/duration from same sentence
-        - Track negated symptoms separately (important for differential diagnosis)
-    
-    Args:
-        sentences: List of segmented sentence strings
-        
-    Returns:
-        Tuple of (positive_symptoms, negative_symptoms)
-            positive_symptoms: List of dicts with 'name', 'location'?, 'duration'?
-            negative_symptoms: List of explicitly negated symptom names
-        
-    Example:
-        >>> sentences = ["छाती में दर्द है", "बाईं तरफ", "3 दिन से", "बुखार नहीं है"]
-        >>> symptoms, negatives = extract_symptoms(sentences)
-        >>> symptoms[0]
-        {'name': 'छाती में दर्द', 'location': 'बाईं तरफ', 'duration': '3 दिन'}
-        >>> negatives
-        ['बुखार']
+    Extract symptoms with location and duration.
+    Handles:
+    - Explicit negation (pre/post)
+    - Standalone duration sentences
     """
-    found_positive: Dict[str, Dict[str, str]] = {}  # canonical_name → symptom_dict
+
+    found_positive: Dict[str, Dict[str, str]] = {}
     found_negative: Set[str] = set()
-    
+
+    pending_duration: str | None = None
+
     for sentence in sentences:
-        # Check each known symptom against sentence
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+
+        # Capture standalone duration (e.g. "तीन दिन से")
+        for pattern in DURATION_PATTERNS_COMPILED:
+            match = pattern.search(sentence)
+            if match:
+                # Only buffer if this sentence has NO symptom mention
+                if not any(
+                    variant in sentence
+                    for variants in SYMPTOMS.values()
+                    for variant in variants
+                ):
+                    pending_duration = match.group(0)
+                    break
+
+        # Symptom detection
         for canonical, variants in SYMPTOMS.items():
-            symptom_mentioned = any(variant in sentence for variant in variants) or canonical in sentence
-            
-            if not symptom_mentioned:
+            mentioned = any(v in sentence for v in variants)
+
+            if not mentioned:
                 continue
-            
-            # Negated mention (e.g., "बुखार नहीं है")
+
+            # Explicit negation → negative symptom
             if has_negation(sentence, variants):
                 found_negative.add(canonical)
                 continue
-            
-            # Positive mention - extract with context
+
+            # Positive symptom
             symptom_entry = found_positive.get(canonical, {"name": canonical})
-            
-            # Extract location if present in same sentence
-            for location_name, location_keywords in LOCATIONS.items():
-                if any(keyword in sentence for keyword in location_keywords):
-                    symptom_entry["location"] = location_name
-            
-            # Extract duration if present (use precompiled patterns)
+
+            # Attach pending duration
+            if pending_duration and "duration" not in symptom_entry:
+                symptom_entry["duration"] = pending_duration
+                pending_duration = None
+
+            # Extract duration from same sentence
             for pattern in DURATION_PATTERNS_COMPILED:
                 match = pattern.search(sentence)
                 if match:
                     symptom_entry["duration"] = match.group(0)
-                    break  # Only take first duration found
-            
+                    break
+
+            # Extract location
+            for loc_name, loc_variants in LOCATIONS.items():
+                if any(v in sentence for v in loc_variants):
+                    symptom_entry["location"] = loc_name
+
             found_positive[canonical] = symptom_entry
-    
-    symptoms = list(found_positive.values())
-    
-    # Only include negatives that weren't also mentioned positively
-    # Handles cases like "पहले बुखार था, अब नहीं है" → fever is present, not absent
+
+    # Do not list negatives that also appear positively
     negatives = [
-        symptom for symptom in found_negative 
-        if symptom not in found_positive
+        s for s in found_negative
+        if s not in found_positive
     ]
-    
-    return symptoms, negatives
+
+    return list(found_positive.values()), negatives
 
 
-# ==============================================================================
-# MEDICATION EXTRACTION
-# ==============================================================================
+# Medication extraction (simple substring matching)
 def extract_medications(text: str) -> List[str]:
     """
-    Extract medications from text using simple substring matching.
-    
-    Strategy: Search entire transcript for known medication names.
-    Works across both patient (mentions current meds) and doctor
-    (prescribes new meds) speech.
-    
-    Args:
-        text: Combined transcript text (typically includes both speakers)
-        
-    Returns:
-        List of canonical medication names found
-        
-    Note: Current implementation has false positive risk (e.g., "पैन" 
-    can appear in regular words). Future improvement: add word boundary
-    checks or extract only from doctor utterances.
-        
-    Example:
-        >>> extract_medications("मैं डोलो ले रहा हूं")
-        ['पैरासिटामोल']
+    Extract medications using canonical vocab matching.
     """
+
     medications: List[str] = []
-    
+
     for canonical, variants in MEDICATIONS.items():
-        if any(variant in text for variant in variants):
+        if any(v in text for v in variants):
             medications.append(canonical)
-    
+
     return medications
 
+def extract_patient_name(text: str) -> Optional[str]:
+    """
+    Extract patient name from full transcript text.
 
-# ==============================================================================
-# DEPRECATED: CONTEXT ATTACHMENT
-# ==============================================================================
-def attach_context_and_confidence(
-    symptoms: List[Dict[str, Any]], 
-    sentences: List[str]
-) -> List[Dict[str, Any]]:
+    Priority:
+    1. English explicit command: "patient name Samarth"
+    2. Hindi explicit phrases: "मेरा नाम समार्थ है"
+    3. Hindi self-intro: "मैं समार्थ हूँ"
     """
-    DEPRECATED: Attach context from adjacent sentences to symptoms.
-    
-    This function handles cases where location/duration appear in separate
-    sentences from the symptom mention. Currently unused in pipeline because
-    the main extract_symptoms() function handles context well enough.
-    
-    Historical example:
-        Sentence 1: "छाती में दर्द है"
-        Sentence 2: "बाईं तरफ" ← This gets attached to symptom from S1
-    
-    Keeping this for reference in case we need cross-sentence context later.
+
+    if not text:
+        return None
+
+    # 1. English explicit
+    m = EN_NAME_PATTERN.search(text)
+    if m:
+        name = m.group(1).strip()
+        if len(name) >= 2:
+            return name
+
+    # 2. Hindi explicit
+    for pat in HI_NAME_PATTERNS:
+        m = re.search(pat, text)
+        if m:
+            name = m.group(1).strip()
+            if len(name) >= 2:
+                return name
+
+    # 3. Hindi self introduction
+    m = HI_SELF_NAME_PATTERN.search(text)
+    if m:
+        name = m.group(1).strip()
+        if len(name) >= 2:
+            return name
+
+    return None
+
+def extract_patient_age(text: str) -> Optional[int]:
     """
-    last_symptom: Dict[str, Any] = None
-    pending_context: Dict[str, str] = {}
-    
-    for sentence in sentences:
-        # Check if current sentence mentions a symptom
-        mentioned_symptom = None
-        for symptom in symptoms:
-            if symptom["name"] in sentence:
-                mentioned_symptom = symptom
-                break
-        
-        if mentioned_symptom:
-            # Found symptom - boost confidence and attach pending context
-            last_symptom = mentioned_symptom
-            last_symptom["confidence"] = max(
-                last_symptom.get("confidence", 0.9), 0.9
-            )
-            
-            # Apply any pending context from previous sentences
-            for key, value in pending_context.items():
-                last_symptom[key] = value
-                last_symptom["confidence"] = min(
-                    last_symptom["confidence"] + 0.05, 1.0
-                )
-            
-            pending_context.clear()
-            continue
-        
-        # No symptom in current sentence
-        if not last_symptom:
-            # No context yet - buffer location/duration for next symptom
-            for location_name, location_keywords in LOCATIONS.items():
-                if any(keyword in sentence for keyword in location_keywords):
-                    pending_context["location"] = location_name
-            
-            for pattern in DURATION_PATTERNS_COMPILED:
-                match = pattern.search(sentence)
-                if match:
-                    pending_context["duration"] = match.group(0)
-            continue
-        
-        # Have context from previous symptom - try to attach additional details
-        for location_name, location_keywords in LOCATIONS.items():
-            if any(keyword in sentence for keyword in location_keywords):
-                if "location" not in last_symptom:
-                    last_symptom["location"] = location_name
-                    last_symptom["confidence"] = min(
-                        last_symptom["confidence"] + 0.05, 1.0
-                    )
-        
-        for pattern in DURATION_PATTERNS_COMPILED:
-            match = pattern.search(sentence)
-            if match and "duration" not in last_symptom:
-                last_symptom["duration"] = match.group(0)
-                last_symptom["confidence"] = min(
-                    last_symptom["confidence"] + 0.05, 1.0
-                )
-    
-    # Set default confidence for all symptoms
-    for symptom in symptoms:
-        symptom.setdefault("confidence", 0.85)
-    
-    return symptoms
+    Extract patient age from full transcript text.
+    Supports numeric and spoken Hindi numbers.
+    """
+
+    if not text:
+        return None
+
+    for pat in AGE_PATTERNS:
+        m = re.search(pat, text)
+        if m:
+            try:
+                age = int(m.group(1))
+                if 0 < age < 120:
+                    return age
+            except ValueError:
+                pass
+
+    for word, value in HINDI_NUMBER_WORDS.items():
+        if f"{word} साल" in text or f"{word} वर्ष" in text:
+            if 0 < value < 120:
+                return value
+
+    return None
