@@ -23,46 +23,17 @@ PATIENT_CUES: List[str] = [
     "हो रहा", "हो रही", "है", "नहीं है", "नहीं हुई"
 ]
 
-
 class SpeakerDetector:
-    """
-    Stateful speaker detection for a single consultation.
-    
-    Maintains conversation context: if the doctor was speaking,
-    ambiguous sentences default to doctor (conversational continuity).
-    
-    This prevents spurious speaker switches when someone says just
-    "हाँ" or "ठीक है" which could be either speaker.
-    """
     
     def __init__(self):
-        """Initialize with default assumption that patient speaks first."""
         self._last_speaker: str = "patient"
     
     def detect(self, text: str) -> str:
-        """
-        Detect speaker from utterance text, using conversation context.
-        
-        Priority order:
-            1. Strong doctor signals (clinical terminology)
-            2. Medical imperatives (advice/prescription language)
-            3. Patient-specific language (complaints, symptoms)
-            4. Ambiguous → use conversation context
-        
-        Args:
-            text: Utterance text (Hindi)
-            
-        Returns:
-            "doctor" or "patient"
-            
-        Example:
-            >>> detector = SpeakerDetector()
-            >>> detector.detect("मुझे सिर दर्द है")
-            'patient'
-            >>> detector.detect("दवा लें")
-            'doctor'
-        """
         text = text.strip()
+
+        # Guard
+        if len(text) <= 4:
+            return self._last_speaker
         
         # Priority 1: Strong doctor signals (clinical language)
         if any(cue in text for cue in DOCTOR_CUES):
@@ -87,16 +58,9 @@ class SpeakerDetector:
         """Reset to default state for new consultation."""
         self._last_speaker = "patient"
 
-
 # Legacy function for backward compatibility
 # (in case any old code imports this)
 _default_detector = SpeakerDetector()
 
 def detect_speaker_hi(text: str) -> str:
-    """
-    Legacy function - use SpeakerDetector class for new code.
-    
-    Note: This uses a shared detector instance, so it won't work
-    correctly for concurrent sessions. Use SpeakerDetector class instead.
-    """
     return _default_detector.detect(text)
