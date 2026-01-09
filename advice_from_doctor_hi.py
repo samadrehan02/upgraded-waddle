@@ -5,61 +5,48 @@ Identifies advisory language patterns in Hindi medical consultations.
 from typing import List, Dict, Any
 
 # Keywords that indicate medical advice/instructions
-ADVICE_CUES: List[str] = [
-    "खाएं",       # eat
-    "न खाएं",     # don't eat
-    "पीएं",       # drink
-    "मत",         # don't
-    "परहेज",      # avoid
-    "आराम",       # rest
-    "बचें",       # avoid
-    "लेते रहें",  # keep taking
-    "कम करें",    # reduce
-    "ज्यादा न",   # not too much
-    "सुबह",       # morning
-    "शाम",        # evening
-    "खाली पेट",   # empty stomach
-    "खाने के बाद" # after eating
+ADVICE_CUES = [
+    # Medication / actions
+    "लें", "ले", "लेनी", "लेते",
+    "करें", "करे", "करना",
+
+    # Restrictions / negatives
+    "मत", "न", "ना",
+
+    # Diet & fluids
+    "खाएं", "पीएं", "पियो", "पिए", "पानी",
+
+    # Rest / lifestyle
+    "आराम", "परहेज", "बचें",
+
+    # Timing / dosage
+    "सुबह", "दोपहर", "शाम", "रात",
+    "दिन में", "खाली पेट", "खाने के बाद",
+
+    # Follow-up
+    "फिर आ", "दिखा", "मिलें"
 ]
 
-
-def extract_doctor_advice(entries: List[Dict[str, str]]) -> List[str]:
-    """
-    Extract medical advice from doctor's utterances.
+def extract_doctor_advice(transcript: List[Dict[str, str]]) -> List[str]:
+    """Extract doctor's advice/instructions."""
+    advice = []
     
-    Strategy: If a doctor's sentence contains any advisory cue word,
-    treat the entire sentence as advice. This captures both medication
-    instructions and lifestyle recommendations.
+    # First get diagnosis to avoid duplication
+    from diagnosis_from_doctor_hi import extract_doctor_diagnosis
+    diagnosis_lines = set(extract_doctor_diagnosis(transcript))
     
-    Args:
-        entries: List of transcript entries with "speaker" and "text" keys
-        
-    Returns:
-        List of advice strings (may contain duplicates if doctor repeats)
-        
-    Example:
-        >>> entries = [
-        ...     {"speaker": "doctor", "text": "दवा सुबह लें"},
-        ...     {"speaker": "patient", "text": "ठीक है"}
-        ... ]
-        >>> extract_doctor_advice(entries)
-        ['दवा सुबह लें']
-    """
-    advice: List[str] = []
-    
-    for entry in entries:
-        # Only process doctor's speech
+    for entry in transcript:
         if entry.get("speaker") != "doctor":
             continue
         
         text = entry.get("text", "").strip()
-        if not text:
+        
+        # Skip if this was already captured as diagnosis
+        if text in diagnosis_lines:
             continue
         
-        # Check if any advisory cue appears in the sentence
-        for cue in ADVICE_CUES:
-            if cue in text:
-                advice.append(text)
-                break  # Don't add same sentence multiple times
+        # Rest of your existing advice extraction logic...
+        if any(cue in text for cue in ADVICE_CUES):
+            advice.append(text)
     
     return advice
