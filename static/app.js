@@ -15,6 +15,7 @@ const transcriptCount = document.getElementById("transcriptCount");
 const copyBtn = document.getElementById("copyBtn");
 
 let lineCount = 0;
+let partialElement = null;  // Track the partial result div
 
 startBtn.onclick = startRecording;
 stopBtn.onclick = stopRecording;
@@ -36,42 +37,44 @@ async function startRecording() {
     structuredBox.textContent = "";
     llmReportBox.textContent = "";
     lineCount = 0;
+    partialElement = null;
     transcriptCount.textContent = "0 lines";
     copyBtn.style.display = "none";
-    
     clearEmptyStates();
-    
+
     updateStatus("recording", "Recording...");
     startBtn.disabled = true;
     stopBtn.disabled = false;
 
     const wsScheme = location.protocol === "https:" ? "wss" : "ws";
     ws = new WebSocket(`${wsScheme}://${location.host}/ws`);
-    
+
     ws.onerror = (e) => {
         console.error("WebSocket error", e);
         updateStatus("", "Connection error");
         startBtn.disabled = false;
         stopBtn.disabled = true;
     };
-    
+
     ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
-        
+
+        if (data.type === "partial") {
+            // Show partial result (live, uncommitted text)
+            showPartial(data.text);
+            return;
+        }
+
         if (data.type === "transcript") {
+            // Remove partial and append final transcript
+            clearPartial();
             appendTranscript(data.time, data.text);
             return;
         }
-        
-        if (data.type === "partial") {
-            // Could show partial results in a tooltip
-            return;
-        }
-        
+
         if (data.type === "structured") {
             updateStatus("processing", "Generating report...");
             structuredBox.textContent = JSON.stringify(data.data, null, 2);
-            
             // Generate OPD note
             fetch("/generate-report", {
                 method: "POST",
@@ -93,18 +96,18 @@ async function startRecording() {
         }
     };
 
-    // Start audio capture
+    // Start audio capture with larger buffer for efficiency
     try {
         stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        audioContext = new AudioContext();
+        audioContext = new AudioContext({sampleRate: 16000});
         await audioContext.resume();
-        
         source = audioContext.createMediaStreamSource(stream);
+
+        // Increased buffer size from 1024 to 4096 for better efficiency
         processor = audioContext.createScriptProcessor(4096, 1, 1);
-        
         source.connect(processor);
         processor.connect(audioContext.destination);
-        
+
         processor.onaudioprocess = (event) => {
             if (!ws || ws.readyState !== WebSocket.OPEN) return;
             const input = event.inputBuffer.getChannelData(0);
@@ -122,24 +125,45 @@ async function startRecording() {
 function stopRecording() {
     updateStatus("processing", "Processing consultation...");
     stopBtn.disabled = true;
-    
+
     if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send("stop");
     }
-    
+
     setTimeout(() => {
         cleanupAudio();
         startBtn.disabled = false;
     }, 300);
 }
 
+function showPartial(text) {
+    // Create or update the partial result element
+    if (!partialElement) {
+        partialElement = document.createElement("div");
+        partialElement.className = "transcript-line partial";
+        transcriptBox.appendChild(partialElement);
+    }
+
+    // Update partial text with styling to indicate it's temporary
+    partialElement.innerHTML = `<span style="color: #888; font-style: italic;">${text}</span>`;
+    transcriptBox.scrollTop = transcriptBox.scrollHeight;
+}
+
+function clearPartial() {
+    // Remove partial element when final result arrives
+    if (partialElement) {
+        partialElement.remove();
+        partialElement = null;
+    }
+}
+
 function appendTranscript(time, text) {
     const line = document.createElement("div");
     line.className = "transcript-line";
-    line.innerHTML = `<span class="transcript-time">[${time}]</span>${text}`;
+    line.innerHTML = `[${time}] ${text}`;
     transcriptBox.appendChild(line);
     transcriptBox.scrollTop = transcriptBox.scrollHeight;
-    
+
     lineCount++;
     transcriptCount.textContent = `${lineCount} line${lineCount !== 1 ? 's' : ''}`;
 }
